@@ -1,4 +1,4 @@
-This is the README file for Class::Generate, version 1.01.
+This is the README file for Class::Generate, version 1.02.
 
 Class::Generate is a Perl5 module to simplify creating class
 hierarchies.  It offers typed or untyped scalar, array, and hash
@@ -88,3 +88,25 @@ Some bug fixes:
 
   --	Private members, and members in the own style, were not being assigned
 	their default values in constructors.  They are now.
+
+CHANGES IN VERSION 1.02
+
+New option "nfi" (New From Instance) lets the constructor be invoked via a
+reference as well as a class name.
+
+New "-exclude" flag permits method exclusion.  You get more control over
+how users can access a class.
+
+"parent" is deprecated in favor of "-parent".
+
+Values of -instance_var and -class_var flags are now checked to make sure
+they're valid identifiers.
+
+Generation of the base form is more (though not optimally) intelligent.
+
+Some bug fixes:
+
+  --	The use of the -class_var flag wasn't checked in several places.
+
+  --	In "mix" style, there was a reference to "pp" that should have been
+	to "{pp}".

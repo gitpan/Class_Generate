@@ -51,7 +51,7 @@ Class::Generate - Generate Perl class hierarchies
  $another = $obj->copy;			# Copy an object.
  if ( $obj->equals($another) ) { ... }	# Test equality.
 
- subclass s  => [ <more members> ], parent => 'class_name';
+ subclass s  => [ <more members> ], -parent => 'class_name';
 
 =head1 DESCRIPTION
 
@@ -105,7 +105,7 @@ Thus:
 creates a class named C<Person> with two scalar members,
 C<name> and C<age>.
 
-If the type is followed by an identifer,
+If the type is followed by an identifier,
 the identifier is assumed to be a class name,
 and the member is restricted to a blessed reference of the class
 (or one of its subclasses),
@@ -322,7 +322,7 @@ As shown, you specify each member as a C<name=E<gt>value> pair.
 If the C<value> is a string, it specifies the member's type.
 The value may also be a hash reference.
 You use hash references to specify additional member attributes.
-The following is a complete list of the attributes you may specify for an member:
+The following is a complete list of the attributes you may specify for a member:
 
 =over 4
 
@@ -698,12 +698,14 @@ The C<subclass()> function declares classes
 that are subclasses of another class.
 The statement:
 
-    subclass S => [ specification ], parent => P
+    subclass S => [ specification ], -parent => P
 
 declares a package C<s>, and a constructor function C<new>, just like C<class>;
-but C<s-E<gt>new> yields a blessed reference that inherits from C<p>.
+but C<s-E<gt>new> yields a blessed reference that inherits from C<P>.
 You can use all the attributes discussed above in the specification
 of a subclass.
+(Prior to version 1.02 you specified the parent using C<parent=E<gt>P>,
+but this is deprecated in favor of C<-parent=E<gt>P>.)
 
 Class C<p> need not have been defined
 using the C<class> or C<subclass> function.
@@ -717,7 +719,7 @@ You can inherit from multiple classes, providing all are hash-based
 for array-based classes).
 Just list more than one class as the value of C<parent>:
 
-    subclass S => { specification }, parent => 'P1 P2 P3';
+    subclass S => { specification }, -parent => 'P1 P2 P3';
 
 Elements of the C<@ISA> array for package C<S>
 appear in the order you list them.
@@ -732,13 +734,13 @@ override their parent methods.
 If you want to access a parent member
 within C<pre>, C<post>, or C<assertion> code,
 you can do so by invoking C<$self-E<gt>SUPER::member>.
-You cannot access private members.
+You cannot access private members from a subclass.
 
 =head1 FLAGS
 
 You can affect the specification of a class using certain flags.
 A flag is a key/value pair passed as an argument to C<class> (or C<subclass>).
-The first character of the key is always a hyphen ("-").
+The first character of the key is always a hyphen.
 The following is a list of recognized flags:
 
 =over 4
@@ -807,7 +809,7 @@ Virtual classes are a useful modeling aid and debugging tool.
 Specify them using the C<-virtual> flag:
 
     class Parent => [ e => '$' ], '-virtual' => 1;
-    subclass Child => [ d => '$' ], parent => 'Parent';
+    subclass Child => [ d => '$' ], -parent => 'Parent';
     Child->new;		# This is okay
     Parent->new;	# This croaks.
 
@@ -824,6 +826,45 @@ The string serves as a comment for the class.
 
 This flag lets you specify options that alter your class' behavior.
 See L</OPTIONS>.
+
+=item -exclude=>string
+
+Sometimes it isn't appropriate for a user to be able to copy an object.
+And sometimes testing the equality of two object instances makes no sense.
+For these and other situations,
+you have some control over the automatically generated methods for each class.
+
+You control method generation using the C<-exclude> flag.
+Its value is a string of space-separated regular expressions.
+A method is included if it does I<not> match any of the regular expressions.
+For example, a person has a unique social security number,
+so you might want a class where a person can't be copied:
+
+    class Person => [
+	name => '$',
+	ssn  => { type => '$', readonly => 1 }
+    ], -exclude => '^copy$';
+    $o = Person->new name => 'Forrest Gump', ssn => '000-00-0000';
+    $p = $o->copy;	# Run-time error.
+
+The C<-exclude> flag can describe a whole range of esoteric restrictions:
+
+    class More_Examples => [
+	mem1 => { type => '$', required => 1 },
+	mem2 => { type => '@', required => 1 },
+	mem3 => '%',
+	new => { post => '%mem3 = map { $_ => $mem1 } @m2' }
+    ], -exclude => 'undef_ mem2_size mem3';
+    $o = More_Examples->new mem1 => 1, mem2 => [2, 3, 4];
+    @keys = $o->mem3_keys;	# Run-time error.
+    $o->undef_mem1;		# Ditto.
+    print $o->last_m2;		# This works as expected.
+    print $o->m2_size;		# But this blows up.
+
+In C<More_Examples>, it isn't possible to undefine a member.
+The size of C<mem2> can't be determined.
+And C<mem3> is effectively private
+(it can't even be accessed from class methods).
 
 =back
 
@@ -913,7 +954,7 @@ Thus:
     subclass Child => [
 	grade => '$',
 	new   => { style => 'own $_[0]', post => '$grade = $_[1];' }
-    ], parent => 'Person';
+    ], -parent => 'Person';
 
 Now you can create a C<Child> by passing the grade as the second parameter,
 and the name as the first:
@@ -1103,7 +1144,7 @@ you can specify it using the C<instance_var> option:
 	    type => '$',
 	    pre => 'print "foo_mem is ", $this->foo_mem;'
 	}
-    }, parent => 'Foo',
+    }, -parent => 'Foo',
        -options => { instance_var => 'this' };
 
 =head2 Class Variable Name
@@ -1149,6 +1190,20 @@ If you set the C<check_default> option to false,
 C<class> and C<subclass> will not check the types of default values.
 It's common to do so after you have debugged a class.
 
+=head2 Creating New Objects From Instances
+
+By default, C<Class::Generate> lets you create a new object instance only
+from a class name, i.e., C<Class-E<gt>new>.
+However, some Perl programmers prefer another style,
+wherein you can create an object from either a class or an instance
+(see L<perlobj>).
+The C<nfi> (I<n>ew I<f>rom I<i>nstance) option controls whether
+you can use both:
+
+    class C => { ... };
+    $o = C->new;	# Always works.
+    $p = $o->new;	# Works if nfi option is true.
+
 =head1 SANITY CHECKING
 
 Several sections have mentioned errors that will cause your program to croak.
@@ -1185,10 +1240,17 @@ The C<class> and C<subclass> functions emit the following diagnostics:
 
 =item "-class_vars" flag must be string or array reference
 
-(F) The value of the C<-use> flag must be a string
+(F) The value of the C<-class_vars> flag must be a string
 containing a space-separated list of class variables,
 or a reference to an array of strings,
 each of which specifies one or more class variables.
+
+=item "-exclude" flag must be string or array reference
+
+(F) The value of the C<-exclude> flag must be a string
+containing a space-separated list of regular expressions,
+or a reference to an array of strings,
+each of which specifies one or more regular expressions.
 
 =item "-use" flag must be string or array reference
 
@@ -1365,6 +1427,19 @@ is not given as class member.
 =item %s: Specification for "new" must be hash reference
 
 (F) The C<new> attribute of a class must be given as a hash reference.
+
+=item %s: Value of %s option must be an identifier (without a "$")
+
+(F) The value passed to the C<class_var> or C<instance_var> option
+must, when prefixed with a C<$>, be a valid Perl scalar identifier.
+Note that you do not prefix it with a C<$>.
+Use:
+
+    -options => { class_var => 'x' }
+
+and not
+
+    -options => { class_var => '$x' }
 
 =item Cannot save reference as initial value for "%s"
 
