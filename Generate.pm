@@ -7,22 +7,27 @@ use English;
 
 BEGIN {
     use vars qw(@ISA @EXPORT_OK $VERSION);
-    use vars qw($save $accept_refs $strict $allow_redefine);
+    use vars qw($save $accept_refs $strict $allow_redefine $class_var $instance_var $check_code $check_default);
 
     require Exporter;
     @ISA = qw(Exporter);
-    @EXPORT_OK = qw(&class &subclass $save $accept_refs $strict $allow_redefine);
-    $VERSION = '1.00';
+    push @EXPORT_OK, qw(&class &subclass);
+    push @EXPORT_OK, qw($save $accept_refs $strict $allow_redefine $class_var $instance_var $check_code);
+    $VERSION = '1.01';
 
     $accept_refs    = 1;
     $strict	    = 1;
     $allow_redefine = 0;
+    $class_var	    = 'class';
+    $instance_var   = 'self';
+    $check_code	    = 1;
+    $check_default  = 1;
 }
 
 use vars qw(@_initial_values);	# Holds all initial values passed as references.
 
 my ($class_name, $class);
-my ($class_vars, $use_packages, $param_passing_style);
+my ($class_vars, $use_packages, $param_style_spec, $default_pss);
 my %class_options;
 my %classes;			# A record of all classes defined.
 my %base;			# The base types of all classes.
@@ -30,7 +35,7 @@ my %base;			# The base types of all classes.
 my $cm;				# These variables are for error messages.
 my $sa_needed		 = 'must be string or array reference';
 my $sh_needed		 = 'must be string or hash reference';
-my $parent_class_unknown = 'Parent class "%s" was not defined using CLASS or SUBCLASS';
+my $parent_class_unknown = 'Parent class "%s" was not defined using class() or subclass()';
 
 my $allow_redefine_for_class;
 
@@ -49,7 +54,7 @@ my ($initialize,				# These are all used to
     $croak_if_duplicate_names,
     $invalid_spec_message);
 
-my %valid_option  = map(($_ => 1), qw(save strict accept_refs allow_redefine));
+my %valid_option  = map(($_ => 1), qw(save strict accept_refs allow_redefine instance_var check_code check_default));
 
 sub class(%) {					# One of the two interface
     my %params = @_;				# routines to the package.
@@ -66,10 +71,10 @@ sub class(%) {					# One of the two interface
 sub subclass(%) {				# One of the two interface
     my %params = @_;				# routines to the package.
     &$initialize();				# Defines a subclass.
-    croak "Missing subclass parent" unless defined $params{parent};
+    croak "Missing subclass parent"				unless defined $params{parent};
     my $parent;
     eval { $parent = Class::Generate::Array->new($params{parent}) };
-    croak qq|Invalid parent specification ($sa_needed)| if $@;
+    croak qq|Invalid parent specification ($sa_needed)|		if $@ || scalar($parent->values) == 0;
     delete $params{parent};
     &$parse_any_flags(\%params);
     croak "Missing/extra arguments to subclass()"		if scalar(keys %params) != 1;
@@ -78,32 +83,36 @@ sub subclass(%) {				# One of the two interface
     croak "$cm: A package of this name already exists"		if ! $allow_redefine_for_class && &$class_defined($class_name);
     for my $p ( $parent->values ) {
 	croak qq|$cm: Parent package "$p" does not exist|	if ! &$class_defined($p);
-	croak qq|$cm: Base type does not match that of "$p"|
-	    if ! UNIVERSAL::isa($params{$class_name}, $base{$p});
-	carp sprintf("$cm: $parent_class_unknown", $p)
-	    if ! exists $classes{$p} && $WARNING;
+	croak qq|$cm: Base type does not match that of "$p"|	if exists $classes{$p} &&
+								   ! UNIVERSAL::isa($params{$class_name}, $base{$p});
     }
     &$set_class_type($params{$class_name}, $parent);
-    for my $parent_name ( $parent->values ) {
-	if ( defined $classes{$parent_name} ) {
-	    $class->add_parents($classes{$parent_name});
+    for my $p ( $parent->values ) {
+	if ( defined $classes{$p} ) {
+	    $class->add_parents($classes{$p});
 	}
 	else {
-	    carp sprintf("$cm: $parent_class_unknown", $parent_name) if $WARNING;
-	    $class->add_parents($parent_name);
+	    carp sprintf("$cm: $parent_class_unknown", $p)	if $WARNING;
+	    $class->add_parents($p);
 	}
     }
     &$process_class($params{$class_name});
 }
 
+$default_pss = Class::Generate::Array->new('key_value');
+
 $initialize = sub {			# Reset certain variables, and set
-    undef $param_passing_style;		# options to their default values.
-    undef $class_vars;
+    undef $class_vars;			# options to their default values.
     undef $use_packages;
-    %class_options = ( virtual	   => 0,
-		       strict	   => $strict,
-		       save	   => $save,
-		       accept_refs => $accept_refs );
+    $param_style_spec = $default_pss;
+    %class_options = ( virtual	    => 0,
+		       strict	    => $strict,
+		       save	    => $save,
+		       accept_refs  => $accept_refs,
+		       class_var    => $class_var,
+		       instance_var => $instance_var,
+		       check_code   => $check_code,
+		       check_default=> $check_default );
     $allow_redefine_for_class = $allow_redefine;
 };
 
@@ -112,12 +121,12 @@ $set_class_type = sub {			# Set $class to the type (array or
     my @params = ($class_name, %class_options);
     if ( UNIVERSAL::isa($class_spec, 'ARRAY') ) {
 	if ( defined $parent ) {
-	    my @values = $parent->values;
+	    my ($parent_name, @rest) = $parent->values;
 	    croak qq|$cm: An array reference based subclass must have exactly one parent|
-		if $#values != 0;
-	    croak sprintf("$cm: $parent_class_unknown", $parent)
-		if ! exists $classes{$values[0]};
-	    push @params, ( base_index => $classes{$values[0]}->last + 1 );
+		if @rest;
+	    croak sprintf("$cm: $parent_class_unknown", $parent_name)
+		if ! exists $classes{$parent_name};
+	    push @params, ( base_index => $classes{$parent_name}->last + 1 );
 	}
 	$class = Class::Generate::Array_Class->new(@params);
     }
@@ -138,20 +147,19 @@ $parse_class_specification = sub {	# Parse the class' specification,
     if ( defined $specs{new} ) {
 	croak qq|$cm: Specification for "new" must be hash reference|
 	    unless UNIVERSAL::isa($specs{new}, 'HASH');
-	my $required_items;
-	if ( defined $specs{new}{required} ) {
-	    eval { $required_items = Class::Generate::Array->new($specs{new}{required}) };
+	my %new_spec = %{$specs{new}};	# Modify %new_spec, not parameter passed
+	my $required_items;		# to class() or subclass().
+	if ( defined $new_spec{required} ) {
+	    eval { $required_items = Class::Generate::Array->new($new_spec{required}) };
 	    croak qq|$cm: Invalid specification for required constructor parameters ($sa_needed)| if $@;
-	    delete $specs{new}{required};
+	    delete $new_spec{required};
 	}
-	if ( defined $specs{new}{style} ) {
-	    eval { $param_passing_style = Class::Generate::Array->new($specs{new}{style}) };
+	if ( defined $new_spec{style} ) {
+	    eval { $param_style_spec = Class::Generate::Array->new($new_spec{style}) };
 	    croak qq|$cm: Invalid parameter-passing style ($sa_needed)| if $@;
-	    croak qq|$cm: Invalid parameter-passing style type "$$param_passing_style[0]"|
-		unless ($param_passing_style->values)[0] =~ /^(?:key_value|mix|positional|own)$/;
-	    delete $specs{new}{style};
+	    delete $new_spec{style};
 	}
-	$class->constructor(Class::Generate::Constructor->new(%{$specs{new}}));
+	$class->constructor(Class::Generate::Constructor->new(%new_spec));
 	if ( defined $required_items ) {
 	    for ( $required_items->values ) {
 		if ( /^\w+$/ ) {
@@ -165,13 +173,16 @@ $parse_class_specification = sub {	# Parse the class' specification,
 	    }
 	}
     }
+    else {
+	$class->constructor(Class::Generate::Constructor->new);
+    }
 
     my $actual_name;
     for my $member_name ( grep $_ ne 'new', keys %specs ) {
 	$actual_name = $member_name;
 	$actual_name =~ s/^&//;
 	croak qq|$cm: Invalid member/method name "$actual_name"| unless $actual_name =~ /^[A-Za-z_]\w*$/;
-	croak qq|$cm: "self" is reserved|			 unless $actual_name ne 'self';
+	croak qq|$cm: "$instance_var" is reserved|		 unless $actual_name ne $class_options{instance_var};
 	if ( substr($member_name, 0, 1) eq '&' ) {
 	    &$parse_method_specification($member_name, $actual_name, \%specs);
 	}
@@ -179,8 +190,7 @@ $parse_class_specification = sub {	# Parse the class' specification,
 	    &$parse_member_specification($member_name, \%specs, \%required);
 	}
     }
-    $class->constructor->style(&$constructor_parameter_passing_style)
-	if defined $param_passing_style;
+    $class->constructor->style(&$constructor_parameter_passing_style);
 };
 
 $parse_method_specification = sub {
@@ -218,7 +228,7 @@ $parse_member_specification = sub {
 
     $spec{required} = 1 if $$required{$member_name};
     if ( exists $spec{default} ) {
-	if ( $WARNING ) {
+	if ( $WARNING && $class_options{check_default} ) {
 	    eval { Class::Generate::Support::verify_value($spec{default}, $spec{type}) };
 	    carp qq|$cm: Default value for "$member_name" is not correctly typed| if $@;
 	}
@@ -233,6 +243,10 @@ $parse_member_specification = sub {
     }
     elsif ( $spec{type} !~ m/[\$\@\%]/ ) {
 	croak qq|$cm: Member "$member_name": "$spec{type}" is not a valid type|;
+    }
+    if ( $spec{required} && $spec{private} ) {
+	carp qq|$cm: "required" attribute ignored for private member "$member_name"| if $WARNING;
+	delete $spec{required};
     }
     delete @member_params{grep ! defined $member_params{$_}, keys %member_params};
     if ( substr($spec{type}, 0, 1) eq '@' ) {
@@ -286,7 +300,7 @@ $parse_any_flags = sub {
 	  option:
 	    while ( my ($o, $o_value) = each %$value ) {
 		if ( ! $valid_option{$o} ) {
-		     carp qq|Unknown option "$o" ignored|;
+		     carp qq|Unknown option "$o" ignored| if $WARNING;
 		     next option;
 		 }
 		$class_options{$o} = $o_value;
@@ -313,7 +327,8 @@ $set_attributes = sub {		# a member or method w.r.t. a class.
     }
 };
 
-my $initial_value_form = __PACKAGE__ . '::_initial_values';
+my $containing_package = __PACKAGE__ . '::';
+my $initial_value_form = $containing_package . '_initial_values';
 
 $store_initial_value_reference = sub {		# Store initial values that are
     my ($default_value, $var_name) = @_;	# references in an accessible
@@ -330,13 +345,20 @@ $class_defined = sub {			# Return TRUE if the argument
 					# Do the main work of processing a class.
 $process_class = sub {			# Parse its specification, generate a
     my $class_spec = $_[0];		# form, and evaluate that form.
-    my $errors_found_in_user_defined_code;
+    my (@warnings, $errors);
     &$croak_if_duplicate_names($class_spec);
     &$parse_class_specification(UNIVERSAL::isa($class_spec, 'ARRAY') ? @$class_spec : %$class_spec);
     Class::Generate::Member_Names::set_element_regexps();
     $class->add_class_vars($class_vars->values)		  if $class_vars;
     $class->add_use_packages($use_packages->values)	  if $use_packages;
-    Class::Generate::Code_Checker::report_any_problems_in_user_defined_code($class, $cm, \$errors_found_in_user_defined_code) if $WARNING;
+    if ( $WARNING && $class_options{check_code} ) {
+	Class::Generate::Code_Checker::check_user_defined_code($class, $cm, \@warnings, \$errors);
+	for my $warning ( @warnings ) {
+	    carp $warning;
+	}
+	carp $errors if $errors;
+    }
+
     my $form = $class->form;
     if ( $class_options{save} ) {
 	my ($class_file, $ob, $cb);
@@ -356,12 +378,14 @@ $process_class = sub {			# Parse its specification, generate a
 	print CLASS_FILE $ob, $form, $cb, "\n1;\n";
 	close CLASS_FILE;
     }
+    croak "$cm: Cannot continue after errors" if $errors;
     {
 	local $WARNING = undef;		# Warnings have been reported during
 	eval $form;			# user-defined code analysis.
-	croak $@ if $@;
+	if ( $@ ) {
+	    croak "$cm: Evaluation failed (missing final semicolon in pre/post code?)";
+	}
     }
-    croak "$cm: Cannot continue after errors" if $errors_found_in_user_defined_code;
     $classes{$class_name} = $class;
     $base{$class_name} = (UNIVERSAL::isa($class_spec, 'ARRAY') ? 'ARRAY' : 'HASH');
 };
@@ -369,35 +393,30 @@ $process_class = sub {			# Parse its specification, generate a
 $constructor_parameter_passing_style = sub {	# Establish the parameter-passing style
     my ($style,					# for a class' constructor, meanwhile
         @values,				# checking for mismatches w.r.t. the
-	$containing_package,			# class' superclass. Return an
-	$constructor_calling_error_message,	# appropriate style.
-	$parent_with_constructor);
+	$parent_with_constructor,		# class' superclass. Return an
+	$parent_constructor_package_name);	# appropriate style.
     if ( defined $class->parents ) {
-	$containing_package = __PACKAGE__ . '::';
-	$constructor_calling_error_message = qq|$cm: Probable mismatch calling constructor in superclass "%s"|;
 	$parent_with_constructor = Class::Generate::Support::class_containing_method('new', $class);
+	$parent_constructor_package_name = (ref $parent_with_constructor ? $parent_with_constructor->name : $parent_with_constructor);
     }
-    ! defined $param_passing_style || (($style, @values) = $param_passing_style->values)[0] eq 'key_value' and do {
-	if ( defined $parent_with_constructor ) {
-	    unless ( $parent_with_constructor->constructor->style->isa($containing_package . 'Key_Value') ) {
-		carp sprintf($constructor_calling_error_message, $parent_with_constructor->name) if $WARNING;
+    (($style, @values) = $param_style_spec->values)[0] eq 'key_value' and do {
+	if ( defined $parent_with_constructor && ref $parent_with_constructor && index(ref $parent_with_constructor, $containing_package) == 0 ) {
+	    my $invoked_constructor_style = $parent_with_constructor->constructor->style;
+	    unless ( $invoked_constructor_style->isa($containing_package . 'Key_Value') ||
+		     $invoked_constructor_style->isa($containing_package . 'Own') ) {
+		carp $cm, ': Probable mismatch calling constructor in superclass "', $parent_constructor_package_name, '"' if $WARNING;
 	    }
 	}
 	return Class::Generate::Key_Value->new('params');
     };
     $style eq 'positional' and do {
 	my $s = Class::Generate::Positional->new;
-	my @member_names = $class->members_keys;
+	my @member_names = $class->nonprivate_member_names;
 	croak "$cm: Missing/extra members in style" unless $#values == $#member_names;
 	&$set_positional_parameters_order($s, @values);
 	return $s;
     };
     $style eq 'mix' and do {
-	if ( defined $parent_with_constructor ) {
-	    unless ( $parent_with_constructor->constructor->style->isa($containing_package . 'Mix') ) {
-		carp sprintf($constructor_calling_error_message, $parent_with_constructor->name) if $WARNING;
-	    }
-	}
 	my $s = Class::Generate::Mix->new('params');
 	my @member_names = $class->members_keys;
 	croak "$cm: Extra parameters in style specifier" unless $#values <= $#member_names;
@@ -405,11 +424,8 @@ $constructor_parameter_passing_style = sub {	# Establish the parameter-passing s
 	return $s;
     };
     $style eq 'own' and do {
-	if ( defined $parent_with_constructor ) {
-	    carp sprintf($constructor_calling_error_message, $parent_with_constructor->name) if $WARNING;
-	}
 	for ( my $i = 0; $i <= $#values; $i++ ) {
-	    &$store_initial_value_reference(\$values[$i], $parent_with_constructor->name . '::new') if ref $values[$i];
+	    &$store_initial_value_reference(\$values[$i], $parent_constructor_package_name . '::new') if ref $values[$i];
 	}
 	return Class::Generate::Own->new([@values]);
     };
@@ -497,7 +513,7 @@ sub set_element_regexps() {		# Establish the regexps for
     }
 }
 
-sub substituted($) {			# Within a code fragement, replace
+sub substituted($) {			# Within a code fragment, replace
     my $code = $_[0];			# member names and accessors with the
 					# appropriate forms.
     $code =~ s/$method_regexp/method_invocation($1)/eg     if defined $method_regexp;
@@ -567,46 +583,57 @@ my $member_error_message = '%s, member "%s": In "%s" code: %s';
 my $method_error_message = '%s, method "%s": %s';
 
 sub create_code_checking_package($);
-sub code_problems($$\@;\@);
+sub fragment_as_sub($$\@;\@);
+sub collect_code_problems($$$$@);
 
 # Check each user-defined code fragment in $class for errors. This includes
 # pre, post, and assert code, as well as user-defined methods.  Set
 # $errors_found according to whether errors (not warnings) were found.
-sub report_any_problems_in_user_defined_code($$$) {
-    my ($class, $class_name_label, $errors_found) = @_;
-    my ($code, @valid_variables, @class_vars, $warnings, $errors, @members);
+sub check_user_defined_code($$$$) {
+    my ($class, $class_name_label, $warnings, $errors) = @_;
+    my ($code, $instance_var, @valid_variables, @class_vars, $w, $e, @members, $problems_in_pre);
     create_code_checking_package $class;
     @valid_variables = map $_->as_var, (@members = $class->members_values);
     @class_vars = $class->class_vars;
-    undef $$errors_found;
+    $instance_var = $class->instance_var;
+    @$warnings = ();
+    undef $$errors;
     for my $member ( $class->constructor, @members ) {
-	for my $attr ( qw(pre post assert) ) {
-	    if ( defined ($code = $member->$attr()) ) {
-		($warnings, $errors) = code_problems $code, $class->instance_variable, @class_vars, @valid_variables;
-		for my $warning ( @$warnings ) {
-		    carp sprintf $member_error_message, $class_name_label, $member->name, $attr, $warning;
-		}
-		if ( $errors ) {
-		    carp sprintf $member_error_message, $class_name_label, $member->name, $attr, $errors;
-		    $$errors_found = 1;
-		}
+	if ( defined ($code = $member->pre) ) {
+	    $code = fragment_as_sub $code, $instance_var, @class_vars, @valid_variables;
+	    collect_code_problems $code,
+				  $warnings, $errors,
+				  $member_error_message, $class_name_label, $member->name, 'pre';
+	    $problems_in_pre = @$warnings || $$errors;
+	}
+	# Because post shares pre's scope, check post with pre prepended.
+	# Strip newlines in pre to preserve line numbers in post.
+	if ( defined ($code = $member->post) ) {
+	    my $pre = $member->pre;
+	    if ( defined $pre && ! $problems_in_pre ) {	# Don't report errors
+		$pre =~ s/\n+/ /g;			# in pre again.
+		$code = $pre . $code;
 	    }
+	    $code = fragment_as_sub $code, $instance_var, @class_vars, @valid_variables;
+	    collect_code_problems $code,
+				  $warnings, $errors,
+				  $member_error_message, $class_name_label, $member->name, 'post';
+	}
+	if ( defined ($code = $member->assert) ) {
+	    $code = fragment_as_sub $code, $instance_var, @class_vars, @valid_variables;
+	    collect_code_problems $code,
+				  $warnings, $errors,
+				  $member_error_message, $class_name_label, $member->name, 'assert';
 	}
     }
     for my $method ( $class->user_defined_methods_values ) {
 	if ( $method->isa('Class::Generate::Class_Method') ) {
-	    ($warnings, $errors) = code_problems $method->body, $class->class_variable, @class_vars;
+	    $code = fragment_as_sub $method->body, $class->class_var, @class_vars;
 	}
 	else {
-	    ($warnings, $errors) = code_problems $method->body, $class->instance_variable, @class_vars, @valid_variables;
+	    $code = fragment_as_sub $method->body, $instance_var, @class_vars, @valid_variables;
 	}
-	for my $warning ( @$warnings ) {
-	    carp sprintf $method_error_message, $class_name_label, $method->name, $warning;
-	}
-	if ( $errors ) {
-	    carp sprintf $method_error_message, $class_name_label, $method->name, $errors;
-	    $$errors_found = 1;
-	}
+	collect_code_problems $code, $warnings, $errors, $method_error_message, $class_name_label, $method->name;
     }
 }
 
@@ -620,22 +647,30 @@ sub create_code_checking_package($) {	# Each class with user-defined code gets
     $packages .= join('', map('use ' . $_ . ';', $class->use_packages));
     eval $package_decl . $packages;
 }
-
-sub code_problems($$\@;\@) {
-    my ($code, $id_var, $class_variables, $valid_variables) = @_;
-    my ($form, @vars, @warnings);
-    $form  = "sub{my $id_var;";
-    if ( $#$class_variables >= 0 ) {
-	$form .= 'my(' . join(',', map((ref $_ ? keys %$_ : $_), @$class_variables)) . ');';
-    }
-    if ( $valid_variables && $#$valid_variables >= 0 ) {
-	$form .= 'my(' . join(',', @$valid_variables) . ');';
-    }
-    $form .= $code . '};';
+					# Evaluate a code fragment, passing on
+sub collect_code_problems($$$$@) {	# warnings and errors.
+    my ($code_form,  $warnings, $errors, $error_message, @params) = @_;
+    my @warnings;
     local $SIG{__WARN__} = sub { push @warnings, $_[0] };
     local $SIG{__DIE__};
-    eval $package_decl . $form;
-    return (\@warnings, $@);
+    eval $package_decl . $code_form;
+    for my $w ( @warnings ) {
+	push @$warnings, sprintf $error_message, @params, $w;
+    }
+    $$errors .= sprintf($error_message, @params, $@) if $@;
+}
+
+sub fragment_as_sub($$\@;\@) {
+    my ($code, $id_var, $class_vars, $valid_vars) = @_;
+    my $form;
+    $form  = "sub{my $id_var;";
+    if ( $#$class_vars >= 0 ) {
+	$form .= 'my(' . join(',', map((ref $_ ? keys %$_ : $_), @$class_vars)) . ');';
+    }
+    if ( $valid_vars && $#$valid_vars >= 0 ) {
+	$form .= 'my(' . join(',', @$valid_vars) . ');';
+    }
+    $form .= $code . '};';
 }
 
 package Class::Generate::Array;		# Given a string or an ARRAY, return an
@@ -686,12 +721,11 @@ sub new {				# is a HASH, it *must* contain the key.
 package Class::Generate::Support;	# Miscellaneous support routines.
 no strict;				# Definitely NOT strict!
 use English;
-
-sub class_containing_method($$) {	# Return the superclass of $class that
-    my ($method, $class) = @_;		# contains the method that the form
-    for my $parent ( $class->parents ) {# (new $class)->$method would invoke.
-	next if ! ref $parent;		# Return undef if no such class exists.
-	local *stab = eval ('*' . $parent->name . '::');
+					# Return the superclass of $class that
+sub class_containing_method($$) {	# contains the method that the form
+    my ($method, $class) = @_;		# (new $class)->$method would invoke.
+    for my $parent ( $class->parents ) {# Return undef if no such class exists.
+	local *stab = eval ('*' . (ref $parent ? $parent->name : $parent) . '::');
 	local *method_entry = $stab{$method};
 	if ( defined *method_entry && defined &method_entry ) {
 	    return $parent;
@@ -768,6 +802,11 @@ sub comment {
     my $self = shift;
     return $self->{'comment'};
 }
+sub key {
+    my $self = shift;
+    return $self->{'key'} if $#_ == -1;
+    $self->{'key'} = $_[0];
+}
 sub assertion {					# Return a form that croaks if
     my $self = shift;				# the member's assertion fails.
     my $class = $_[0];
@@ -814,21 +853,22 @@ sub param_test {		# Return a form that dies if a constructor
 sub form {				# Return a form for a member and all
     my $self = shift;			# its relevant associated accessors.
     my $class = $_[0];
-    my ($element, $exists, $lvalue, $values);
-    $element = $class->instance_variable . '->' . $class->index($self->name);
+    my ($element, $exists, $lvalue, $values, $form, $body);
+    $element = $class->instance_var . '->' . $class->index($self->name);
     $exists  = $class->existence_test . ' ' . $element;
     $lvalue  = $self->lvalue('$_[0]')					if $self->can('lvalue');
     $values  = $self->values('$_[0]')					if $self->can('values');
-    my $form = '';
+
+    $form = '';
     $form .= Class::Generate::Support::comment_form($self->comment)	if defined $self->comment;
-    $form .= $class->sub_form($self->name,
-			      do { my $body = '';
-				   for my $param_form ( $self->member_forms($class) ) {
-				       $body .= $self->$param_form($class, $element, $exists, $lvalue, $values);
-				   }
-				   $body .= '    ' . $self->param_count_error_form($class) . ";\n" if $WARNING;
-				   $body
-				 });
+
+    $body = '';
+    for my $param_form ( $self->member_forms($class) ) {
+	$body .= $self->$param_form($class, $element, $exists, $lvalue, $values);
+    }
+    $body .= '    ' . $self->param_count_error_form($class) . ";\n" if $WARNING;
+
+    $form .= $class->sub_form($self->name, $body);
     $form .= $self->readonly_methods($element, $self->name, $exists)	if $self->can('readonly_methods');
     $form .= $self->modifying_methods($class, $element, $self->name)	if ! $class->readonly($self->name) && $self->can('modifying_methods');
     return $form;
@@ -868,7 +908,7 @@ sub undef_form {			# Return the form to undefine
     my $self = shift;			# a member.
     my ($class, $element, $member_name) = @_;
     return "sub undef_$member_name {\n" .
-	   "    my \$self = shift;\n" .
+	   '    my ' . $class->instance_var . " = shift;\n" .
 	   '    ' . $class->undef_form . " $element;\n" .
 	   "}\n";
 }
@@ -890,13 +930,21 @@ sub param_assignment_form {	# Return a form that assigns a parameter
     my ($class, $style) = @_;
     my ($name, $element, $param, $default, $exists);
     $name     = $self->name;
-    $element  = $class->instance_variable . '->' . $class->index($name);
+    $element  = $class->instance_var . '->' . $class->index($name);
     $param    = $style->ref($name);
     $default  = $self->default;
     $exists   = $style->existence_test($name) . ' ' . $param;
     my $form = "    $element = ";
     $form .= defined $default ? "$exists ? $param : $default" : "$param if $exists";
     return $form . ";\n";
+}
+
+sub default_assignment_form {	# Return a form that assigns a default value
+    my $self = shift;		# to a member.
+    my $class = $_[0];
+    my $element;
+    $element  = $class->instance_var . '->' . $class->index($self->name);
+    return "    $element = " . $self->default . ";\n";
 }
 
 package Class::Generate::Scalar_Member;		# A Member subclass for
@@ -958,6 +1006,30 @@ sub modifying_methods {
     my $self = shift;
     my $class = $_[0];
     return $self->undef_form(@_) if ! $class->required($self->name);
+}
+
+sub copy_form {
+    my $self = shift;
+    my ($from, $to) = @_;
+    my $form = "    $to = $from";
+    $form .= '->copy' if $self->base;
+    $form .= " if defined $from;\n";
+    return $form;
+}
+
+sub equals {
+    my $self = shift;
+    my ($index, $existence_test) = @_;
+    my ($sr, $or) = ('$self->' . $index, '$o->' . $index);
+    my $form = "    return undef if $existence_test $sr ^ $existence_test $or;\n" .
+	       "    if ( $existence_test $sr ) { return undef unless $sr"; 
+    if ( $self->base ) {
+	$form .= "->equals($or)";
+    }
+    else {
+	$form .= " eq $or";
+    }
+    return $form . " }\n";
 }
 
 package Class::Generate::List_Member;		# A Member subclass for list
@@ -1089,6 +1161,10 @@ sub readonly_methods {
     return ('sub ' . $member_name . "_size {\n" .
 	    "    my \$self = shift;\n" .
 	    "    return $exists ? \$#{$element} : -1;\n" .
+	    "}\n" .
+	    "sub last_$member_name {\n" .
+	    "    my \$self = shift;\n" .
+	    "    return $exists ? $element" . "[\$#{$element}] : undef;\n" .
 	    "}\n");
 }
 
@@ -1104,7 +1180,36 @@ sub method_regexp {
 sub accessor_names {
     my $self = shift;
     my $name = $self->name;
-    return ($name, 'add_' . $name, $name . '_size', 'undef_' . $name);
+    return ($name, 'add_' . $name, $name . '_size', 'undef_' . $name, 'last_' . $name);
+}
+
+sub copy_form {
+    my $self = shift;
+    my ($from, $to) = @_;
+    my $form = "    $to = [ ";
+    if ( $self->base ) {
+	$form .= "map defined \$_ ? \$_->copy : undef, ";
+    }
+    $form .= "\@{$from} ] if defined $from;\n";
+    return $form;
+}
+
+sub equals {
+    my $self = shift;
+    my ($index, $existence_test) = @_;
+    my ($sr, $or) = ('$self->' . $index, '$o->' . $index);
+    my $form = "    return undef if $existence_test($sr) ^ $existence_test($or);\n" .
+	       "    if ( $existence_test $sr ) {\n" .
+	       "	return undef unless (\$ub = \$#{$sr}) == \$#{$or};\n" .
+	       "	for ( my \$i = 0; \$i <= \$ub; \$i++ ) {\n" .
+	       "	    return undef unless $sr" . '[$i]';
+    if ( $self->base ) {
+	$form .= '->equals(' . $or . '[$i])';
+    }
+    else {
+	$form .= ' eq ' . $or . '[$i]';
+    }
+    return $form . ";\n\t}\n    }\n";
 }
 
 package Class::Generate::Hash_Member;		# A List subclass for Hash
@@ -1164,6 +1269,46 @@ sub accessor_names {
     return ($name, $name . '_keys', $name . '_values', 'undef_' . $name);
 }
 
+sub copy_form {
+    my $self = shift;
+    my ($from, $to) = @_;
+    my $form;
+    if ( $self->base ) {
+	$form = "    if ( defined $from ) {\n" .
+	        "\t$to = {};\n" .
+	        "\twhile ( my (\$key, \$value) = each \%{$from} ) {\n" .
+		"\t    $to" . '->{$key} = defined $value ? $value->copy : undef;' . "\n" .
+		"\t}\n" .
+		"    }\n";
+    }
+    else {
+	$form = "    $to = { \%{$from} } if defined $from;\n";
+    }
+    return $form;
+}
+
+sub equals {
+    my $self = shift;
+    my ($index, $existence_test) = @_;
+    my ($sr, $or) = ('$self->' . $index, '$o->' . $index);
+    my $form = "    return undef if $existence_test $sr ^ $existence_test $or;\n" .
+	       "    if ( $existence_test $sr ) {\n" .
+	       '	@self_keys = keys %{' . $sr . '};' . "\n" .
+	       '	return undef unless $#self_keys == scalar(keys %{' . $or . '}) - 1;' . "\n" .
+	       '	for my $k ( @self_keys ) {' . "\n" .
+	       "	    return undef unless exists $or" . '{$k};' . "\n" .
+	       '	    return undef if ($self_value_defined = defined ' . $sr . '{$k}) ^ defined ' . $or . '{$k};' . "\n" .
+	       '	    if ( $self_value_defined ) { return undef unless ';
+    if ( $self->base ) {
+	$form .= $sr . '{$k}->equals(' . $or . '{$k})';
+    }
+    else {
+	$form .= $sr . '{$k} eq ' . $or . '{$k}';
+    }
+    $form .= " }\n\t}\n    }\n";
+    return $form;
+}
+
 package Class::Generate::Constructor;	# The constructor is treated as a
 use strict;				# special type of member.  It includes
 use English;				# constraints on required members.
@@ -1173,9 +1318,6 @@ use vars qw(@ISA);
 sub new {
     my $class = shift;
     my $self = $class->SUPER::new('new', @_);
-    if ( ! exists $self->{'style'} ) {
-	$self->{'style'} = Class::Generate::Key_Value->new('params');
-    }
     return $self;
 }
 sub style {
@@ -1201,13 +1343,18 @@ sub form {
     my $self = shift;
     my $class = $_[0];
     my $style = $self->style;
+    my ($iv, $cv) = ($class->instance_var, $class->class_var);
     my $form;
     $form  = "sub new {\n" .
-	     '    my ' . $class->class_variable . " = shift;\n";
-    $form .= q|    croak '| . $self->name_form($class) . q|Virtual class' unless $class ne '| . $class->name . qq|';\n|
-	if $class->virtual && $WARNING;
-    $form .= '    ' . $style->init_form . "\n"		if ! $class->can_assign_all_params &&
+	     '    my ' . $cv . " = shift;\n";
+    if ( $class->virtual && $WARNING ) {
+	$form .= q|    croak '| . $self->name_form($class) . q|Virtual class' unless $class ne '| . $class->name . qq|';\n|;
+    }
+    $form .= $style->init_form($class, $self)		if ! $class->can_assign_all_params &&
 							   $style->can('init_form'); 
+    if ( $WARNING && ! $class->parents && $style->can('params_check_form') ) {
+	$form .= $style->params_check_form($class, $self);
+    }
     if ( $WARNING && ! $style->isa('Class::Generate::Own') ) {
 	my @param_tests = map $_->param_test($class), grep $_->param_must_be_checked($class), $class->members_values;
 	if ( @param_tests ) {
@@ -1224,16 +1371,20 @@ sub form {
 	$form .=  $style->self_from_super_form($class);
     }
     else {
-	$form .= '    my $self = ' . $class->base . ";\n" .
-		 '    bless $self, $class;' . "\n";
+	$form .= '    my ' . $iv . ' = ' . $class->base . ";\n" .
+		 '    bless ' . $iv . ', ' . $cv . ";\n";
     }
     if ( ! $class->can_assign_all_params ) {
-	$form .= '    ' . $class->size_establishment . "\n"	     if $class->can('size_establishment');
+	$form .= $class->size_establishment($iv)    if $class->can('size_establishment');
 	if ( ! $style->isa('Class::Generate::Own') ) {
 	    for my $name ( $class->nonprivate_member_names ) {
 		$form .= $class->members($name)->param_assignment_form($class, $style);
 	    }
 	}
+    }
+    for my $member ( grep(($style->isa('Class::Generate::Own') || $class->private($_->name)) &&
+			  defined $_->default, $class->members_values) ) {
+	$form .= $member->default_assignment_form($class);
     }
     $form .= Class::Generate::Member_Names::substituted($self->post) if defined $self->post;
     if ( $WARNING ) {
@@ -1242,7 +1393,7 @@ sub form {
 	    $form .= '    ' . $member->assertion($class) . "\n";
 	}
     }
-    $form .= "    return \$self;\n" .
+    $form .= '    return ' . $iv . ";\n" .
 	     "}\n";
     return $form;
 }
@@ -1316,7 +1467,6 @@ sub new {
     my $class = shift;
     my $self = { name => shift, @_ };
     bless $self, $class;
-    $self->{'constructor'} = Class::Generate::Constructor->new;
     return $self;
 }
 
@@ -1443,10 +1593,8 @@ sub member_methods_form {	# Return a form containing methods for all
 
 sub user_defined_methods_form {		# Return a form containing all
     my $self = shift;			# user-defined methods.
-    my %methods = $self->user_defined_methods;
-    return '' if ! %methods;
-    my $form = join('', map($_->form($self), values %methods));
-    return $form . "\n";
+    my $form = join('', map($_->form($self), $self->user_defined_methods_values));
+    return length $form > 0 ? $form . "\n" : '';
 }
 
 sub form {				# Return a form representing
@@ -1465,6 +1613,8 @@ sub form {				# Return a form representing
     $form .= $self->constructor->form($self)				     if defined $self->members || $self->constructor->style->isa('Class::Generate::Own') || ($self->virtual && $WARNING);
     $form .= $self->member_methods_form;
     $form .= $self->user_defined_methods_form;
+    $form .= $self->copy_form;
+    $form .= $self->equals_form			if ! grep $_ eq 'equals', $self->user_defined_methods_keys;
     return $form;
 }
 
@@ -1488,7 +1638,7 @@ sub sub_form {
     my ($name, $body) = @_;
     my ($form, $is_private);
     $form = (($is_private = $self->private($name)) ? "\$$name = sub" : "sub $name") . " {\n" .
-            "    my \$self = shift;\n" .
+            '    my ' . $self->instance_var . " = shift;\n" .
 	    $body .
 	    '}';
     $form .= ';' if $is_private;
@@ -1531,6 +1681,62 @@ sub private_members_decl_form {
 	return 'my (' . join(', ', map('$' . $_, @private_members)) . ");\n";
     };
 }
+
+sub copy_form {
+    my $self = shift;
+    my ($form, @members, $has_parents);
+    @members = $self->members_values;
+    $has_parents = defined $self->parents;
+    $form = "sub copy {\n" .
+	    "    my \$self = shift;\n" .
+	    "    my \$copy;\n";
+    if ( ! grep(defined $_->base, @members) && ! $has_parents ) {
+	$form .= '    $copy = ' . $self->wholesale_copy . ";\n";
+    }
+    else {
+	$form .= '    $copy = ' . ($has_parents ? '$self->SUPER::copy' : $self->empty_form) . ";\n";
+	$form .= $self->size_establishment('$copy')	if $self->can('size_establishment');
+	for my $m ( @members ) {
+	    my $index = $self->index($m->name);
+	    $form .= $m->copy_form('$self->' . $index, '$copy->' . $index);
+	}
+    }
+    $form .= "    bless \$copy, ref \$self;\n" .
+	     "    return \$copy;\n" .
+	     "}\n";
+    return $form;
+}
+
+sub equals_form {
+    my $self = shift;
+    my ($form, @parents, @members, $existence_test, @local_vars, @key_members);
+    @parents = $self->parents;
+    @members = $self->members_values;
+    if ( @key_members = grep $_->key, @members ) {
+	@members = @key_members;
+    }
+    $existence_test = $self->existence_test;
+    $form = "sub equals {\n" .
+	    "    my \$self = shift;\n" .
+	    "    my \$o = \$_[0];\n";
+    if ( grep $_->isa('Class::Generate::Hash_Member'), @members ) {
+	push @local_vars, qw($self_value_defined @self_keys);
+    }
+    if ( grep $_->isa('Class::Generate::Array_Member'), @members ) {
+	push @local_vars, qw($ub);
+    }
+    if ( @local_vars ) {
+	$form .= '    my (' . join(', ', @local_vars) . ");\n";
+    }
+    if ( @parents ) {
+	$form .= "    return undef unless \$self->SUPER::equals(\$o);\n";
+    }
+    $form .= join("\n", map $_->equals($self->index($_->name), $existence_test), @members) .
+	"    return 1;\n" .
+	"}\n";
+    return $form;
+}
+
 sub all_members_required {
     my $self = shift;
     return ! grep ! ($self->private($_) || $self->required($_)), $self->members_keys;
@@ -1540,11 +1746,13 @@ sub nonprivate_member_names {
     return grep ! $self->private($_), $self->members_keys;
 }
 
-sub class_variable {
-    return '$class';
+sub class_var {
+    my $self = shift;
+    return '$' . $self->{'class_var'};
 }
-sub instance_variable {
-    return '$self';
+sub instance_var {
+    my $self = shift;
+    return '$' . $self->{'instance_var'};
 }
 
 package Class::Generate::Array_Class;		# A subclass of Class defining
@@ -1607,7 +1815,8 @@ sub existence_test {
 
 sub size_establishment {
     my $self = shift;
-    return '$#$self = ' . $self->last . ';';
+    my $instance_var = $_[0];
+    return '    $#' . $instance_var . ' = ' . $self->last . ";\n";
 }
 sub can_assign_all_params {
     my $self = shift;
@@ -1618,6 +1827,12 @@ sub can_assign_all_params {
 }
 sub undef_form {
     return 'undef';
+}
+sub wholesale_copy {
+    return '[ @$self ]';
+}
+sub empty_form {
+    return '[]';
 }
 
 package Class::Generate::Hash_Class;		# A subclass of Class defining
@@ -1646,6 +1861,12 @@ sub can_assign_all_params {
 sub undef_form {
     return 'delete';
 }
+sub wholesale_copy {
+    return '{ %$self }';
+}
+sub empty_form {
+    return '{}';
+}
 
 package Class::Generate::Param_Style;		# A virtual class encompassing
 use strict;					# parameter-passing styles.
@@ -1667,10 +1888,24 @@ sub delete_self_members_form {
     }
 }
 
+sub odd_params_check_form {
+    my $self = shift;
+    my ($class, $constructor) = @_;
+    return q|    croak '| . $constructor->name_form($class) . q|Odd number of parameters' if | .
+			$self->odd_params_test($class) . ";\n";
+}
+
+sub my_decl_form {
+    my $self = shift;
+    my $class = $_[0];
+    return '    my ' . $class->instance_var . ' = ' . $class->class_var . '->SUPER::new';
+}
+
 package Class::Generate::Key_Value;		# The key/value parameter-
 use strict;					# passing style.  It adds
 use vars qw(@ISA);				# the name of the variable
 @ISA = qw(Class::Generate::Param_Style);	# that holds the parameters.
+use English;
 
 sub new {
     my $class = shift;
@@ -1694,14 +1929,40 @@ sub existence_test {
     return 'exists';
 }
 sub init_form {
-    return 'my %params = @_;';
+    my $self = shift;
+    my ($class, $constructor) = @_;
+    my ($form, $cn);
+    $form = '';
+    $form .= $self->odd_params_check_form($class, $constructor) if $WARNING;
+    $form .= "    my \%params = \@_;\n";
+    return $form;
+}
+sub odd_params_test {
+    return '$#_%2 == 0';
 }
 sub self_from_super_form {
     my $self = shift;
     my $class = $_[0];
     return '    my %super_params = %params;' . "\n" .
 	   '    ' . $self->delete_self_members_form($class->nonprivate_member_names) . "\n" .
-	   '    my $self = $class->SUPER::new(%super_params);' . "\n"
+	   $self->my_decl_form($class) . "(\%super_params);\n";
+}
+sub params_check_form {
+    my $self = shift;
+    my ($class, $constructor) = @_;
+    my ($cn, @nmns, $test);
+    $cn = $constructor->name_form($class);
+    @nmns = $class->nonprivate_member_names;
+    return '' if ! @nmns;
+    if ( $#nmns == 0 ) {
+	$test = qq|\$key eq '$nmns[0]'|;
+    }
+    else {
+	$test = 'grep $key eq $_, qw(' . join(' ', $class->nonprivate_member_names) . ')';
+    }
+    return "    for my \$key ( keys \%params ) {\n" .
+	   "\t" . "croak qq|$cn" . '"$key" is not a member|' . " unless $test;\n" .
+	   "    }\n";
 }
 
 package Class::Generate::Positional;		# The positional parameter-
@@ -1728,14 +1989,24 @@ sub existence_test {
 sub self_from_super_form {
     my $self = shift;
     my $class = $_[0];
-    return '    my @super_params = @_[' . scalar($class->nonprivate_member_names) . '..$#_];' . "\n" .
-	   '    my $self = $class->SUPER::new(@super_params);' . "\n";
+    my $lb = scalar($class->nonprivate_member_names) || 0;
+    return '    my @super_params = @_[' . $lb . '..$#_];' . "\n" .
+	   $self->my_decl_form($class) . "(\@super_params);\n";
+}
+sub params_check_form {
+    my $self = shift;
+    my ($class, $constructor) = @_;
+    my $cn = $constructor->name_form($class);
+    my $max_params = scalar($class->nonprivate_member_names) || 0;
+    return qq|    croak '$cn| . qq|Only $max_params parameter(s) allowed (', \$#_+1, ' given)'| .
+		      " unless \$#_ < $max_params;\n";
 }
 
 package Class::Generate::Mix;			# The mix parameter-passing
 use strict;					# style.  It combines key/value
 use vars qw(@ISA);				# and positional.
 @ISA = qw(Class::Generate::Param_Style);
+use English;
 
 sub new {
     my $class = shift;
@@ -1769,7 +2040,21 @@ sub pcount {
 }
 sub init_form {
     my $self = shift;
-    return 'my %params = @_[' . $self->pcount . '..$#_];';
+    my ($class, $constructor) = @_;
+    my ($form, $m) = ('', $self->max_possible_params($class));
+    $form .= $self->odd_params_check_form($class, $constructor, $self->pcount, $m) if $WARNING;
+    $form .= '    my %params = @_[' . $self->pcount . "..(\$#_ < $m ? \$#_ : $m)];\n";
+    return $form;
+}
+sub odd_params_test {
+    my $self = shift;
+    my $class = $_[0];
+    my ($p, $test);
+    $p = $self->pcount;
+    $test = '$#_>=' . $p;
+    $test .= ' && $#_<=' . $self->max_possible_params($class) if $class->parents;
+    $test .= ' && $#_%2 == ' . ($p%2 == 0 ? '0' : '1');
+    return $test;
 }
 sub self_from_super_form {
     my $self = shift;
@@ -1777,10 +2062,27 @@ sub self_from_super_form {
     my @positional_members = keys %{$self->{'pnames'}};
     my %self_members = map { ($_ => 1) } $class->nonprivate_member_names;
     delete @self_members{@positional_members};
-    my $form;
-    return ('    my %super_params = @_[' . ($#positional_members+1) . '..$#_];' . "\n" .
-	    '    ' . $self->delete_self_members_form(keys %self_members) . "\n" .
-	    '    my $self = $class->SUPER::new(%super_params);' . "\n");
+    my $m = $self->max_possible_params($class);
+    return $self->my_decl_form($class) . '(@_[' . ($m+1) . '..$#_]);' . "\n";
+}
+sub max_possible_params {
+    my $self = shift;
+    my $class = $_[0];
+    my $p = $self->pcount;
+    return $p + 2*(scalar($class->nonprivate_member_names) - $p) - 1;
+}
+sub params_check_form {
+    my $self = shift;
+    my $form = $self->{'kv'}->params_check_form(@_);
+    if ( (my $i = index($form, 'qw(')) >= 0 ) {
+	$i += 3;
+	my (%names, $ll);
+	$ll = index(substr($form, $i), ')');
+	%names = map(($_ => 1), split /\s+/, substr $form, $i, $ll);
+	delete @names{keys %{$self->{'pnames'}}};
+	substr($form, $i, $ll) = join ' ', keys %names;
+    }
+    return $form;
 }
 
 package Class::Generate::Own;			# The "own" parameter-passing
@@ -1806,8 +2108,9 @@ sub can_assign_all_params {
 
 sub self_from_super_form {
     my $self = shift;
+    my $class = $_[0];
     my ($form, @sv);
-    $form = '    my $self = $class->SUPER::new';
+    $form = $self->my_decl_form($class);
     if ( @sv = $self->super_values ) {
 	$form .= '(' . join(',', @sv) . ')';
     }

@@ -1,4 +1,4 @@
-This is the README file for Class::Generate, version 1.00.
+This is the README file for Class::Generate, version 1.01.
 
 Class::Generate is a Perl5 module to simplify creating class
 hierarchies.  It offers typed or untyped scalar, array, and hash
@@ -36,3 +36,55 @@ and subclass() functions.
 Copyright (c) 1999 Steven Wartik. All rights reserved. This program is free
 software; you can redistribute it and/or modify it under the same terms as
 Perl itself.
+
+CHANGES IN VERSION 1.01
+
+Parameter passing from a subclass to its superclass constructor is greatly
+improved. Several bugs were detected and corrected. The algorithms are
+smarter.  Superclasses not declared via class() or subclass() are handled
+better.
+
+In 1.00, class() and subclass() sometimes modified their parameters.  They no
+longer do.
+
+Array members have a new accessor, last_<name>, which is a convenient
+abbreviation for the oft-used $obj-><name>($obj-><name>_size).
+
+Each class now has two methods that operate on instances: copy(), to copy
+an object instance, and equals(), to test the equality of two instances.
+
+New options:
+
+  --	"class_var", which lets you choose an identifer other than "$class"
+	as the class variable within a class method.
+
+  --	"instance_var", which lets you choose an identifier other than
+	"$self" as the instance variable within an object method.
+
+  --	"check_code", which lets you control whether user-defined code
+	is checked for correctness.
+
+  --	"check_default", which does the same thing for default values
+	of members.
+
+Some bug fixes:
+
+  --	A bug in checking for duplicate member/method names has been corrected.
+
+  --	A bug wherein class variables with default values were not always being
+	properly declared has been corrected.
+
+  --	List members were not checking for attempts to set read-only members.
+	They do now.
+
+  --	The error message emitted regarding an incorrect number of parameters
+	reported the wrong number.  It now reports the right number.
+
+  --	Code checking in "post" code did not have the context of "pre" code.
+	It now does.
+
+  --	A member's "pre" code needs a trailing semicolon. The error message
+	in 1.00 was not informative.  It is improved in 1.01.
+
+  --	Private members, and members in the own style, were not being assigned
+	their default values in constructors.  They are now.

@@ -38,6 +38,7 @@ Class::Generate - Generate Perl class hierarchies
  @a = $obj->a;				# Access whole array.
  $ary_member_value = $obj->a(2);	# Access array member 2.
  $s = $obj->a_size;			# Return size of array.
+ $value = $obj->last_a;			# Return last element of array.
 
 		# (Class) Hash type accessor:
  $obj->h({ k_1=>v1, ..., k_n=>v_n })	# Assign whole hash to member.
@@ -46,6 +47,9 @@ Class::Generate - Generate Perl class hierarchies
  $hash_member_value = $obj->h($key);	# Access hash member value $key.
  @keys = $obj->h_keys;			# Access keys of member h.
  @values = $obj->h_values;		# Access values of member h.
+
+ $another = $obj->copy;			# Copy an object.
+ if ( $obj->equals($another) ) { ... }	# Test equality.
 
  subclass s  => [ <more members> ], parent => 'class_name';
 
@@ -101,8 +105,9 @@ Thus:
 creates a class named C<Person> with two scalar members,
 C<name> and C<age>.
 
-If the type is followed by a class name,
-the member is restricted to a blessed reference of the class
+If the type is followed by an identifer,
+the identifier is assumed to be a class name,
+and the member is restricted to a blessed reference of the class
 (or one of its subclasses),
 an array whose elements are blessed references of the class,
 or a hash whose keys are strings
@@ -159,8 +164,8 @@ to an instance of C<Class_Name> or one of its subclasses.
 =head2 Array (name => '@' or name => '@Class')
 
 The member is an array.
-If the C<@Class> form is used, all members of the array must be a blessed reference
-to C<Class> or one of its subclasses.
+If the C<@Class> form is used, all members of the array must be
+a blessed reference to C<Class> or one of its subclasses.
 An array member has three associated methods:
 
 =over 4
@@ -188,6 +193,12 @@ This method appends its arguments to the member's array.
 
 This method returns the index of the last element in the array.
 
+=item C<last_name>
+
+This method returns the last element of C<name>,
+or C<undef> if C<name> has no elements.
+It's a shorthand for C<$o-E<gt>array_mem($o-E<gt>array_mem_size)>.
+
 =back
 
 For example:
@@ -205,6 +216,8 @@ For example:
     $p->kids(2, Person->new(name => 'Elmer Fudd'));
     print $p->kids(2)->name;	# Prints 'Elmer Fudd'.
     @kids = $p->kids;		# Get all the kids.
+    print $p->kids($p->kids_size)->name; # Prints 'Porky Pig'.
+    print $p->last_kids->name;	   # So does this.
 
 =head2 Hash (name => '%' or name => '%Class')
 
@@ -260,8 +273,48 @@ For example:
 
 =head1 COMMON METHODS
 
-All members also have a method C<undef_name>.
-This method undefines an member.
+All members also have a method C<undef_m>.
+This method undefines a member C<m>.
+
+=head1 OBJECT INSTANCE METHODS
+
+There are also methods that you can invoke on an object instance.
+These are as follows:
+
+=head2 Copy
+
+Use the C<copy> method to copy the value of an object.
+The expression:
+
+    $p = $o->copy;
+
+assigns to C<$p> a copy of C<$o>.
+Members of C<$o> that are classes (or arrays or hashes of classes)
+are copied using their own C<copy> method.
+
+=head2 Equals
+
+Use the C<equals> method to test the equality of two object instances:
+
+    if ( $o1->equals($o2) ) { ... }
+
+The two object instances are equal if
+members that have values in C<$o1> have equal values in C<$o2>, and vice versa.
+Equality is tested as you would expect:
+two scalar members are equal if they have the same value;
+two array members are equal if they have the same elements;
+two hash members are equal if they have the same key/value pairs.
+
+If a member's value is restricted to a class,
+then equality is tested using that class' C<equals> method.
+Otherwise, it is tested using the C<eq> operator.
+
+By default, all members participate in the equality test.
+If one or more members possess true values for the C<key> attribute,
+then only those members participate in the equality test.
+
+You can override this definition of equality.
+See L<ADDING METHODS>.
 
 =head1 ADVANCED MEMBER SPECIFICATIONS
 
@@ -327,7 +380,8 @@ it may change between invocations.
 If the value is a reference rather than a string,
 it is not re-evaluated.
 In the following, default values for C<e1> and C<e2>
-are based on the members of C<@default_value> each time C<Example-E<gt>new> is invoked,
+are based on the members of C<@default_value>
+each time C<Example-E<gt>new> is invoked,
 whereas C<e3>'s default value is set when the C<class> function is invoked
 to define C<Example>:
 
@@ -345,13 +399,14 @@ to define C<Example>:
 If the default value is a string,
 the C<class> function evaluates it to ensure that it
 is of the correct type for the member.
-Be aware of this if your default value has side effects.
+Be aware of this if your default value has side effects
+(and see L</Checking Default Value Types>).
 
 =item post=>code
 
 The value of this attribute is a string of Perl code.
-It is executed immediately after the member's value is modified through an accessor.
-Within C<post> code, you can refer to members as if they were regular Perl identifiers.
+It is executed immediately after the member's value is modified through its accessor.
+Within C<post> code, you can refer to members as if they were Perl identifiers.
 For instance:
 
     class Person => [ age => { type => '$',
@@ -361,7 +416,8 @@ For instance:
     $p->age(15);
     print $p->age;	# Prints 30 again.
 
-You reference array and hash members as usual.
+You reference array and hash members as usual
+(except for testing for definition; see L<BUGS>).
 You can reference individual elements, or the whole list:
 
     class Foo => [
@@ -369,20 +425,35 @@ You can reference individual elements, or the whole list:
 	m2 => { type => '%', post => '@m1 = keys %m2;' }
     ];
 
-You can also invoke accessors by prefixing them with a C<&>:
+You can also invoke accessors.
+Prefix them with a C<&>:
 
     class Bar => [ 
 	m1 => { type => '@', post => '&undef_m1;' },
 	m2 => { type => '%', post => '@m1 = &m2_keys;' }
     ];
+    $o = new Bar;
+    $o->m1([1, 2, 3]);		# m1 is still undefined.
+    $o->m2({a => 1, b => 2});	# Now m1 is qw(a b).
 
 =item pre=>code
 
 The C<pre> key is similar to the C<post> key,
 but it is executed just before an member is changed.
 It is I<not> executed if the member is only accessed.
-Any variables that you declare in it are guaranteed accessible
-to the C<post> code.
+The C<pre> and C<post> code have the same scope,
+which lets you share variables.
+For instance:
+
+    class Foo => [
+	mem => { type => '$', pre => 'my $v = $mem;', post => 'return $v;' }
+    ];
+    $o = new Foo;
+    $p = $o->mem(1);	# Sets $p to undef.
+    $q = $o->mem(2);	# Sets $q to 1.
+
+is a way to return the previous value of C<mem> any time it's modified
+(but see L<NOTES>).
 
 =item assert=>expression
 
@@ -410,7 +481,7 @@ the member cannot be accessed outside the class;
 that is, it has no accessor functions that can be called
 outside the scope of the package defined by C<class>.
 A private member can, however, be accessed in C<post>, C<pre>, and C<assert>
-code as if it were a non-private member.
+code of other members of the class, just as if it were a non-private member.
 
 =item readonly=>boolean
 
@@ -421,6 +492,11 @@ The member's accessor that is its name can retrieve but not set the member.
 The C<undef_>I<name> accessor is not defined for the member,
 nor are other accessors that might modify the member.
 (Code in C<post> can set it, however.)
+
+=item key=>boolean
+
+If this attribute is true, then the member participates in equality tests.
+See L</Equals>.
 
 =back
 
@@ -474,7 +550,7 @@ Its value is code that is inserted into the constructor
 after parameter values have been assigned to members.
 The C<class> function performs variable substitution.
 
-The C<pre> member is I<not> recognized in C<new>.
+The C<pre> key is I<not> recognized in C<new>.
 
 =item assert=>expression
 
@@ -507,7 +583,8 @@ Both object methods and class methods are allowed.
 Add methods using an member of the form C<'&name'=E<gt>body>,
 where C<body> is a string containing valid Perl code.
 This yields a method C<name> with the specified C<body>.
-For object methods, the C<class> function performs variable substitution as described above.
+For object methods, the C<class> function performs variable substitution
+as described in L<ADVANCED MEMBER SPECIFICATIONS>.
 For example,
 
     class Person => [ first_name => '$',
@@ -550,14 +627,14 @@ You can, however, use accessors, as usual:
 
     class Foo => [
 	m1 => '$', m2 => '@',
-	'&copy' => { class_method => 1,
-		     body => 'my $in = $_[0];
-			      my $out = Foo->new(m1 => $in->m1,
-						 m2 => [$in->m2]);
-			      return $out;' }
+	'&to_string' => {
+	    class_method => 1,
+	    body => 'my $o = $_[0];
+		     return $o->m1 . "[" . join(",", $o->m2) . "]"';
+	}
     ];
-    $f1 = Foo->new;
-    $f2 = Foo->copy($f1);
+    $f = Foo->new(m1 => 1, m2 => [2, 3]);
+    print Foo->to_string($f);	# Prints "1[2,3]"
 
 =item objects=>list of object instance expressions
 
@@ -598,6 +675,22 @@ The string must match exactly,
 so C<Bar-E<gt>new(m1 =E<gt> 8)> is not replaced.
 
 =back
+
+You can add a method named C<&equals>
+to provide your own definition of equality.
+An example:
+
+    $epsilon = 0.1e-20; 
+    class Imaginary_No => {			# Treat floating-point
+	real => '$',				# values as equal if their
+	imag => '$',				# difference is less than
+	'&equals' => qq|my \$o = \$_[0];	# some epsilon.
+		        return abs(\$real - \$o->real) < $epsilon &&
+			       abs(\$imag - \$o->imag) < $epsilon;|
+    };
+
+You can use the C<private> attribute to create a class
+whose instances cannot be tested for equality except within the class.
 
 =head1 THE SUBCLASS FUNCTION
 
@@ -829,10 +922,52 @@ and the name as the first:
 
 =back
 
-The C<subclass> function has some understanding of superclass parameter forms.
-Unfortunately, not all combinations make sense.
-You will get a warning if you do something illogical.
-The key/value style is safest.
+If you use styles other than C<key_value>,
+you must be aware of how a subclass constructor passes parameter
+to its superclass constructor.
+C<Class::Generate> has some understanding of styles,
+but not all combinations make sense,
+and for those that do, you have to follow certain conventions.
+Here are the rules for a subclass C<S> with parent C<P>:
+
+=over 4
+
+=item 1.
+
+If C<S>'s constructor uses the C<key_value> style,
+C<P>'s constructor must use the C<key_value> or C<own> style.
+The parameters are treated as a hash;
+C<P>'s constructor receives a hash with
+all elements indexed by nonprivate members of C<S> deleted.
+C<P>'s constructor must not expect
+the hash elements to be passed in a prespecified order.
+
+=item 2.
+
+If C<S>'s constructor uses the C<positional> style,
+C<P>'s constructor may use any style.
+If C<S> has C<n> nonprivate members,
+then parameters 0..I<n>-1 are used to assign members of C<S>.
+Remaining parameters are passed to C<P::new>,
+in the same order they were passed to C<S::new>.
+
+=item 3.
+
+If C<S>'s constructor uses the C<mix> style,
+C<P>'s constructor may use any style.
+If C<S> has I<n> nonprivate members,
+of which I<p> are passed by position,
+then parameters 0..(I<p>-1)+2*(I<n>-I<p>) are used to assign members of C<S>.
+Remaining parameters are passed to C<P::new>,
+in the same order they were passed to C<S::new>.
+
+=item 4.
+
+If C<S>'s constructor uses the C<own> style,
+you are responsible for ensuring that it passes parameters to
+C<P>'s constructor in the correct style.
+
+=back
 
 =head1 OPTIONS
 
@@ -951,7 +1086,68 @@ not packages containing classes.
 For that reason, C<class> and C<subclass> croak if you try to define
 a class whose name is a package that already exists.
 Setting the C<allow_redefine> option to true changes this behavior.
-It also opens up a minefield potential errors, so be careful.
+It also opens up a minefield of potential errors, so be careful.
+
+=head2 Instance Variable Name
+
+By default, the reference to an object instance is stored
+in a variable named C<$self>.
+If you prefer another name (e.g., C<$this>),
+you can specify it using the C<instance_var> option:
+
+    class Foo => {
+	foo_mem => '$'
+    };
+    subclass Bar => {
+	bar_mem => {
+	    type => '$',
+	    pre => 'print "foo_mem is ", $this->foo_mem;'
+	}
+    }, parent => 'Foo',
+       -options => { instance_var => 'this' };
+
+=head2 Class Variable Name
+
+By default, the reference to a class variable is stored
+in a variable named C<$class>.
+If you prefer another name,
+you can specify it using the C<class_var> option.
+
+=head2 Checking User-Defined Code
+
+The C<class> and C<subclass> functions check that
+any C<pre>, C<post>, or C<assert> code is valid Perl.
+They do so by creating and evaluating a subroutine that contains the code,
+along with declarations that mimic the context in which the code would execute.
+The alternative would be to wait until the entire class has been defined,
+but that would yield error messages with line numbers that don't correspond
+to your code.
+Never underestimate the value of meaningful error messages.
+
+However, this approach results in code being evaluated twice:
+once to check its syntax and semantics,
+and again when the package is created.
+To avoid this overhead,
+set the C<check_code> option to false.
+
+=head2 Checking Default Value Types
+
+A default value for a member is checked against the type of the member.
+If a member is an array, for instance,
+you will get a warning if C<class> detects that its default value
+is anything other than an array reference.
+
+If you specify a default value as a string,
+C<class> and C<subclass> have to evaluate the string
+to see if it yields a value of the correct type.
+This may cause unwanted behavior
+if the string is an expression with side effects.
+Furthermore, your program will behave differently depending on
+whether warnings are in effect (see L<SANITY CHECKING>).
+
+If you set the C<check_default> option to false,
+C<class> and C<subclass> will not check the types of default values.
+It's common to do so after you have debugged a class.
 
 =head1 SANITY CHECKING
 
@@ -960,6 +1156,7 @@ Actually this only happens if you use Perl's C<-w> flag.
 Once your classes are I<fully> debugged,
 you may want to stop using C<-w> for the sake of efficiency.
 But go slow on that.
+Remember, you can still make mistakes in code that invokes a class.
 
 Assertions are included only if the C<-w> flag is used.
 
@@ -1000,9 +1197,15 @@ containing a space-separated list of packages to use,
 or a reference to an array of strings,
 each of which is a package to use.
 
-=item %s: "self" is reserved
+=item %s: "%s" is reserved
 
-(F) The name C<self> cannot be used as a member or method name.
+(F) The member name conflicts with the instance variable name for the class.
+Change the member name,
+or change the instance variable name using the C<instance_var> option.
+
+=item %s: "required" attribute ignored for private member "%s"
+
+(W) A member cannot be both private and required as a constructor parameter.
 
 =item %s: A package of this name already exists
 
@@ -1024,7 +1227,7 @@ its parent(s) must be specified as hash references.
 
 =item %s: Cannot append to "%s": %s
 
-The C<save> option was true,
+(F) The C<save> option was true,
 but a class definition cannot be appended to the named file for the
 specified operating system-specific reason.
 
@@ -1055,6 +1258,12 @@ Scalars, lists, and other references are not allowed.
 
 (F) A class' constructor specifies a style that requires listing members,
 and includes a value that is not a member.
+
+=item %s: Evaluation failed (missing final semicolon in pre/post code?)
+
+(F) Usually this error occurs if a class member has
+a C<pre> or C<post> code fragment that does not end with a semicolon.
+The other cause is an error in C<Class::Generate>.
 
 =item %s: Extra parameters in style specifier
 
@@ -1129,7 +1338,7 @@ but not all non-private members (or too many members) were listed.
 (F) The set of member and method names cannot contain duplicates.
 Member and method names share the same namespace.
 
-=item %s: Parent class "%s" was not defined using CLASS or SUBCLASS
+=item %s: Parent class "%s" was not defined using class() or subclass()
 
 (W) The C<subclass> function permits parents to be any package,
 not just those defined using C<class> and C<subclass>.
@@ -1257,6 +1466,13 @@ has failed.
 
 (F) The constructor of a virtual class has been directly invoked.
 
+=item %s::new: "%s" is not a member
+
+(F) The named class uses the key/value parameter passing style.
+Its constructor was invoked with a key/value pair with a key that
+doesn't name a member of the class.
+This message often occurs if you forget to use the key/value style.
+
 =item %s::new: Invalid "%s" parameter
 
 (F) The class' constructor was invoked with a parameter
@@ -1273,6 +1489,20 @@ or the parameter was not of the correct type
 (e.g., hash reference where an array reference is needed,
 not a blessed reference to the necessary class).
 
+=item %s::new: Odd number of parameters
+
+(F) The named class uses the key/value or mix parameter passing style.
+Its constructor was invoked with too many or too few
+(not just right) parameters,
+i.e., something that didn't look like a list of key/value pairs
+(accounting for any positional parameters in the mix style).
+
+=item %s::new: Only %d parameter(s) allowed (%d given)
+
+(F) The named class uses the positional parameter passing style.
+Its constructor was invoked with more parameters
+than the class has members.
+
 =back
 
 =head1 SEE ALSO
@@ -1288,17 +1518,35 @@ Perl itself.
 
 =head1 BUGS
 
-Constructors that use the key/value parameter style
-detect missing, but not extraneous, keys.
+It would be nice to have more selective control of what errors are checked.
 
-If a default value has side effects,
-its behavior varies depending on whether the C<-w> flag is used.
+That C<pre> and C<post> code share the same name space
+can cause problems if the C<check_code> option is true.
+The reason is that the C<post> code is evaluated with a prepended copy
+of C<pre> in which all newlines are replaced by spaces.
+This replacement ensures that an error message about C<post>
+refers to the appropriate line number within C<post>.
+However, if the C<pre> code contains the C<E<lt>E<lt>> quotation form,
+Perl will probably complain about a syntax error;
+and if it contains a comment,
+Perl will ignore the first line of the C<post> code.
+Note this only affects code checking,
+not the package that's generated.
 
-Parameter-passing from a class' constructor
-to its superclass' constructor could be smarter.
+In the current implementation, if member C<m> is an array,
+then within user-defined code,
+the test C<if ( @m ) { ... }> does not work in hash-based classes
+unless C<@m> is initialized.
+Use C<$#m != -1> instead.
+Or specify C<m> as explicitly empty:
 
-It would be nice to have selective control of what errors are checked,
-rather than the current all-or-nothing model.
+    m => { type => '@', default => '[]' }
+
+Hash members have an analogous bug.
+Use C<scalar(&m_keys) != 0> to test if a hash member is empty
+in user-defined code.
+
+The C<&equals> and C<&copy> functions do not understand multiple inheritance.
 
 =head1 NOTES
 
